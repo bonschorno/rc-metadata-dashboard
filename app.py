@@ -10,8 +10,71 @@ st.set_page_config(
     layout="wide"
 )
 
+def check_authentication():
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    return st.session_state.authenticated
+
+def authenticate_user(api_key, group_id):
+    if api_key and group_id and len(group_id) == 5 and group_id.isdigit():
+        st.session_state.authenticated = True
+        st.session_state.api_key = api_key
+        st.session_state.group_id = group_id
+        return True
+    return False
+
+if not check_authentication():
+    st.title("🔐 Authentication Required")
+    st.markdown("Please enter your credentials to access the dashboard.")
+    
+    with st.form("auth_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            api_key = st.text_input(
+                "API Key", 
+                type="password",
+                placeholder="Enter your API key",
+                help="Your secure API key for accessing the dashboard"
+            )
+        
+        with col2:
+            group_id = st.text_input(
+                "Group ID", 
+                placeholder="12345",
+                help="Your 5-digit group identifier (e.g., 12345)",
+                max_chars=5
+            )
+        
+        submitted = st.form_submit_button("Access Dashboard", use_container_width=True)
+        
+        if submitted:
+            if not api_key:
+                st.error("Please provide an API key")
+            elif not group_id:
+                st.error("Please provide a Group ID")
+            elif len(group_id) != 5 or not group_id.isdigit():
+                st.error("Group ID must be exactly 5 digits")
+            elif authenticate_user(api_key, group_id):
+                st.success("Authentication successful! Loading dashboard...")
+                st.rerun()
+            else:
+                st.error("Authentication failed. Please check your credentials.")
+    
+    st.info("💡 For this demo, enter any API key and group ID to access the dashboard.")
+    st.stop()
+
 st.title("📊 GHE: Research Collection Metadata")
 st.markdown("---")
+
+with st.sidebar:
+    st.success(f"✅ Authenticated (Group: {st.session_state.group_id})")
+    if st.button("Logout"):
+        st.session_state.authenticated = False
+        st.session_state.api_key = None
+        st.session_state.group_id = None
+        st.rerun()
+    st.markdown("---")
 
 @st.cache_data
 def load_data():
