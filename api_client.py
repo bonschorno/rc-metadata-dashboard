@@ -131,7 +131,7 @@ class ETHResearchCollectionAPI:
         
         df['doi_dummy'] = df['doi'].apply(lambda x: 'Has DOI' if pd.notna(x) else 'No DOI')
         
-        column_order = ['name', 'doi', 'doi_dummy', 'publication_type', 'publication_type_group',
+        column_order = ['uuid', 'name', 'doi', 'doi_dummy', 'publication_type', 'publication_type_group',
                        'date_issued', 'year', 'license', 'license_short', 'license_short_group']
         existing_columns = [col for col in column_order if col in df.columns]
         df = df[existing_columns]

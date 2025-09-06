@@ -20,13 +20,15 @@ venv/
 ENV/
 .venv
 
-# Data files
-data/
+# Data files - allow important statistics files
 *.csv
 *.xlsx
 *.json
 !.env.example
 !requirements.txt
+!data/publication_statistics.csv
+!data/monthly_visits.csv
+!data/country_statistics.csv
 
 # IDE
 .vscode/
