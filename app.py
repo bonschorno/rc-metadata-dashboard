@@ -78,22 +78,83 @@ with st.sidebar:
 
 @st.cache_data
 def load_data():
-    downloads_df = pd.read_csv('data/downloads.csv')
-    views_df = pd.read_csv('data/views.csv')
-    return downloads_df, views_df
+    # Load new comprehensive statistics data
+    pub_stats = pd.read_csv('data/publication_statistics.csv')
+    monthly_visits = pd.read_csv('data/monthly_visits.csv')
+    country_stats = pd.read_csv('data/country_statistics.csv')
+    
+    # Define chronological month order
+    month_order = ['March 2025', 'April 2025', 'May 2025', 'June 2025', 'July 2025', 'August 2025', 'September 2025']
+    month_to_date = {
+        'March 2025': '2025-03', 'April 2025': '2025-04', 'May 2025': '2025-05',
+        'June 2025': '2025-06', 'July 2025': '2025-07', 'August 2025': '2025-08',
+        'September 2025': '2025-09'
+    }
+    
+    # Create pivot table with proper month ordering
+    monthly_pivot = monthly_visits.pivot(index='title', columns='month', values='visits')
+    
+    # Reorder columns chronologically and ensure all months are present
+    ordered_columns = []
+    for month in month_order:
+        if month in monthly_pivot.columns:
+            ordered_columns.append(month)
+        else:
+            # Add missing months with zeros
+            monthly_pivot[month] = 0
+            ordered_columns.append(month)
+    
+    # Reorder columns chronologically
+    monthly_pivot = monthly_pivot[ordered_columns]
+    monthly_pivot = monthly_pivot.fillna(0)
+    
+    # Convert column names to date format
+    monthly_pivot.columns = [month_to_date[col] for col in monthly_pivot.columns]
+    monthly_pivot.reset_index(inplace=True)
+    
+    # Create downloads and views DataFrames
+    downloads_df = monthly_pivot.rename(columns={'title': 'item'}).copy()
+    views_df = monthly_pivot.rename(columns={'title': 'item'}).copy()
+    
+    # For downloads, use proportional distribution of total downloads across months based on visits
+    for idx, row in pub_stats.iterrows():
+        title = row['title']
+        total_downloads = row['total_downloads']
+        
+        if title in monthly_pivot['title'].values and total_downloads > 0:
+            # Get the row for this publication
+            title_idx = downloads_df[downloads_df['item'] == title].index[0]
+            
+            # Get visit pattern
+            date_cols = [col for col in downloads_df.columns if col != 'item']
+            visit_pattern = [downloads_df.loc[title_idx, col] for col in date_cols]
+            total_visits = sum(visit_pattern)
+            
+            if total_visits > 0:
+                # Distribute downloads proportionally
+                for i, col in enumerate(date_cols):
+                    downloads_df.loc[title_idx, col] = (visit_pattern[i] / total_visits) * total_downloads
+    
+    return downloads_df, views_df, pub_stats, monthly_visits, country_stats
 
-downloads_df, views_df = load_data()
+downloads_df, views_df, pub_stats, monthly_visits, country_stats = load_data()
 
 with st.sidebar:
     st.header("📋 Dashboard Controls")
     
     view_type = st.radio(
         "Select Data View:",
-        ["Overview", "Individual Item Analysis", "Time Series Comparison", "Top Performers"]
+        ["Overview", "Individual Item Analysis", "Time Series Comparison", "Top Performers", "Geographic Distribution"]
     )
     
     st.markdown("---")
-    st.info(f"Total Items: {len(downloads_df)}")
+    st.info(f"""
+    **📊 Data Summary:**
+    - Publications: {len(pub_stats):,}
+    - Total Downloads: {pub_stats['total_downloads'].sum():,}
+    - Total Visits: {pub_stats['total_visits'].sum():,}
+    - Countries: {country_stats['country'].nunique():,}
+    """)
 
 def prepare_time_series_data(df, metric_name):
     date_columns = [col for col in df.columns if col != 'item']
@@ -105,8 +166,8 @@ def prepare_time_series_data(df, metric_name):
 if view_type == "Overview":
     col1, col2 = st.columns(2)
     
-    downloads_total = downloads_df.iloc[:, 1:].sum().sum()
-    views_total = views_df.iloc[:, 1:].sum().sum()
+    downloads_total = int(downloads_df.iloc[:, 1:].sum().sum())
+    views_total = int(views_df.iloc[:, 1:].sum().sum())
     
     with col1:
         st.metric("Total Downloads", f"{downloads_total:,}")
@@ -126,7 +187,7 @@ if view_type == "Overview":
             labels={'x': 'Month', 'y': 'Total Downloads'},
             line_shape='spline'
         )
-        fig_downloads.update_traces(line_color='#1f77b4', line_width=3)
+        fig_downloads.update_traces(line_color='#1f77b4', line_width=3, hovertemplate='%{y:.0f}<extra></extra>')
         fig_downloads.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_downloads, use_container_width=True)
     
@@ -139,7 +200,7 @@ if view_type == "Overview":
             labels={'x': 'Month', 'y': 'Total Views'},
             line_shape='spline'
         )
-        fig_views.update_traces(line_color='#ff7f0e', line_width=3)
+        fig_views.update_traces(line_color='#ff7f0e', line_width=3, hovertemplate='%{y:.0f}<extra></extra>')
         fig_views.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_views, use_container_width=True)
     
@@ -162,7 +223,7 @@ if view_type == "Overview":
         line_shape='spline'
     )
     
-    fig_combined.update_traces(line_width=3)
+    fig_combined.update_traces(line_width=3, hovertemplate='%{y:.0f}<extra></extra>')
     fig_combined.update_layout(height=500, hovermode='x unified')
     
     st.plotly_chart(fig_combined, use_container_width=True)
@@ -196,15 +257,15 @@ elif view_type == "Individual Item Analysis":
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Downloads", f"{item_downloads.sum():,}")
+        st.metric("Total Downloads", f"{int(item_downloads.sum()):,}")
     with col2:
-        st.metric("Total Views", f"{item_views.sum():,}")
+        st.metric("Total Views", f"{int(item_views.sum()):,}")
     with col3:
-        avg_downloads = item_downloads.mean()
-        st.metric("Avg Monthly Downloads", f"{avg_downloads:.1f}")
+        avg_downloads = int(item_downloads.mean())
+        st.metric("Avg Monthly Downloads", f"{avg_downloads:,}")
     with col4:
-        avg_views = item_views.mean()
-        st.metric("Avg Monthly Views", f"{avg_views:.1f}")
+        avg_views = int(item_views.mean())
+        st.metric("Avg Monthly Views", f"{avg_views:,}")
     
     st.markdown("---")
     
@@ -214,13 +275,15 @@ elif view_type == "Individual Item Analysis":
     
     fig.add_trace(
         go.Bar(x=dates_filtered, y=downloads_filtered, name='Downloads',
-              marker_color='#1f77b4'),
+              marker_color='#1f77b4',
+              hovertemplate='%{y:.0f}<extra></extra>'),
         row=1, col=1
     )
     
     fig.add_trace(
         go.Bar(x=dates_filtered, y=views_filtered, name='Views',
-              marker_color='#ff7f0e'),
+              marker_color='#ff7f0e',
+              hovertemplate='%{y:.0f}<extra></extra>'),
         row=2, col=1
     )
     
@@ -257,7 +320,8 @@ elif view_type == "Time Series Comparison":
             fig_downloads.add_trace(go.Scatter(
                 x=dates, y=item_data,
                 mode='lines+markers',
-                name=item[:50] + "..." if len(item) > 50 else item
+                name=item[:50] + "..." if len(item) > 50 else item,
+                hovertemplate='%{y:.0f}<extra></extra>'
             ))
         
         fig_downloads.update_layout(
@@ -276,7 +340,8 @@ elif view_type == "Time Series Comparison":
             fig_views.add_trace(go.Scatter(
                 x=dates, y=item_data,
                 mode='lines+markers',
-                name=item[:50] + "..." if len(item) > 50 else item
+                name=item[:50] + "..." if len(item) > 50 else item,
+                hovertemplate='%{y:.0f}<extra></extra>'
             ))
         
         fig_views.update_layout(
@@ -304,7 +369,7 @@ elif view_type == "Top Performers":
     )
     fig_top_downloads.update_traces(
         marker_color='#1f77b4',
-        hovertemplate='%{x}<extra></extra>'  # Remove 'Item' from hover
+        hovertemplate='%{x:.0f}<extra></extra>'  # Show integer values
     )
     fig_top_downloads.update_layout(height=400 + (top_n * 20), showlegend=False)
     fig_top_downloads.update_yaxes(tickmode='linear')
@@ -322,7 +387,7 @@ elif view_type == "Top Performers":
     )
     fig_top_views.update_traces(
         marker_color='#ff7f0e',
-        hovertemplate='%{x}<extra></extra>'  # Remove 'Item' from hover
+        hovertemplate='%{x:.0f}<extra></extra>'  # Show integer values
     )
     fig_top_views.update_layout(height=400 + (top_n * 20), showlegend=False)
     fig_top_views.update_yaxes(tickmode='linear')
@@ -349,5 +414,92 @@ elif view_type == "Top Performers":
         }
     )
 
+elif view_type == "Geographic Distribution":
+    st.subheader("🌍 Global Access Distribution")
+    
+    # Aggregate country data
+    country_totals = country_stats.groupby(['country_code', 'country'])['visits'].sum().reset_index()
+    country_totals = country_totals.sort_values('visits', ascending=False)
+    
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # World map using plotly
+        # Ensure visits column is numeric
+        country_totals['visits'] = pd.to_numeric(country_totals['visits'])
+        
+        fig_map = px.choropleth(
+            country_totals,
+            locations='country',  # Use country names directly
+            locationmode='country names',
+            color='visits',
+            hover_name='country',
+            hover_data={'visits': ':.0f'},  # Format as integer
+            color_continuous_scale='Blues',
+            title="Worldwide Publication Access",
+            labels={'visits': 'Total Visits'},
+            range_color=[0, country_totals['visits'].max()]
+        )
+        fig_map.update_layout(
+            height=500,
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                projection_type='natural earth'
+            )
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+    
+    with col2:
+        # Top 15 countries
+        top_countries = country_totals.head(15)
+        
+        fig_countries = px.bar(
+            top_countries,
+            x='visits',
+            y='country',
+            orientation='h',
+            title="Top 15 Countries by Visits",
+            labels={'visits': 'Total Visits', 'country': 'Country'},
+            color='visits',
+            color_continuous_scale='Blues'  # Match map color scheme
+        )
+        fig_countries.update_layout(
+            height=500,
+            yaxis={'categoryorder': 'total ascending'},
+            showlegend=False,
+            coloraxis_showscale=False  # Hide color scale bar
+        )
+        # Format hover template to show integers
+        fig_countries.update_traces(hovertemplate='%{y}<br>Total Visits: %{x:.0f}<extra></extra>')
+        st.plotly_chart(fig_countries, use_container_width=True)
+    
+    # Detailed country table
+    st.subheader("📊 Detailed Country Statistics")
+    
+    # Add search functionality
+    search_country = st.text_input("🔍 Search countries:", placeholder="Enter country name...")
+    
+    filtered_countries = country_totals.copy()
+    if search_country:
+        filtered_countries = filtered_countries[
+            filtered_countries['country'].str.contains(search_country, case=False, na=False)
+        ]
+    
+    # Display table
+    st.dataframe(
+        filtered_countries[['country', 'country_code', 'visits']].reset_index(drop=True),
+        use_container_width=True,
+        column_config={
+            'country': st.column_config.TextColumn('Country', width='large'),
+            'country_code': st.column_config.TextColumn('Code', width='small'),
+            'visits': st.column_config.NumberColumn('Total Visits', format='%d')
+        },
+        hide_index=True
+    )
+    
+    st.info(f"Showing {len(filtered_countries)} of {len(country_totals)} countries")
+
 st.markdown("---")
-st.caption("Dashboard created with Streamlit • Data from Research Collection Metadata")
+st.caption("Dashboard created with Streamlit • Data from ETH Research Collection API")
