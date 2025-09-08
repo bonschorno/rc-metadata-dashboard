@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 st.set_page_config(
-    page_title="GHE: Research Collection Metadata",
+    page_title="Research Collection Metadata",
     page_icon="📊",
     layout="wide"
 )
@@ -64,7 +64,7 @@ if not check_authentication():
     st.info("💡 For this demo, enter any API key and group ID to access the dashboard.")
     st.stop()
 
-st.title("📊 GHE: Research Collection Metadata")
+st.title("📊 Research Collection Metadata")
 st.markdown("---")
 
 with st.sidebar:
@@ -78,18 +78,67 @@ with st.sidebar:
 
 @st.cache_data
 def load_data():
-    downloads_df = pd.read_csv('data/downloads.csv')
-    views_df = pd.read_csv('data/views.csv')
-    return downloads_df, views_df
+    # Load the new CSV files
+    monthly_visits = pd.read_csv('data/monthly_visits.csv')
+    publication_stats = pd.read_csv('data/publication_statistics.csv')
+    country_stats = pd.read_csv('data/country_statistics.csv')
+    
+    # Convert month column to YYYY-MM format
+    month_map = {
+        'January': '01', 'February': '02', 'March': '03', 'April': '04',
+        'May': '05', 'June': '06', 'July': '07', 'August': '08',
+        'September': '09', 'October': '10', 'November': '11', 'December': '12'
+    }
+    
+    # Parse month and year from the month column
+    monthly_visits['month_year'] = monthly_visits['month'].apply(
+        lambda x: f"{x.split()[1]}-{month_map[x.split()[0]]}"
+    )
+    
+    # Transform monthly_visits into views format (item, month1, month2, ...)
+    views_pivot = monthly_visits.pivot_table(
+        index='title', 
+        columns='month_year', 
+        values='visits', 
+        fill_value=0
+    )
+    views_pivot = views_pivot.reset_index()
+    views_pivot.rename(columns={'title': 'item'}, inplace=True)
+    
+    # For downloads, use publication_statistics total_downloads
+    # Create a simplified downloads dataframe with same structure as views
+    downloads_pivot = views_pivot.copy()
+    
+    # Get total downloads for each item from publication_statistics
+    downloads_map = dict(zip(publication_stats['title'], publication_stats['total_downloads']))
+    
+    # For each item, distribute downloads proportionally to views
+    for idx, row in downloads_pivot.iterrows():
+        item_name = row['item']
+        total_downloads = downloads_map.get(item_name, 0)
+        
+        # Get views for this item (excluding the 'item' column)
+        item_views = row[1:].values
+        total_views = item_views.sum()
+        
+        if total_views > 0:
+            # Distribute downloads proportionally to views
+            downloads_distribution = (item_views / total_views) * total_downloads
+            downloads_pivot.iloc[idx, 1:] = downloads_distribution.astype(int)
+        else:
+            # If no views, set downloads to 0
+            downloads_pivot.iloc[idx, 1:] = 0
+    
+    return downloads_pivot, views_pivot, country_stats
 
-downloads_df, views_df = load_data()
+downloads_df, views_df, country_stats = load_data()
 
 with st.sidebar:
     st.header("📋 Dashboard Controls")
     
     view_type = st.radio(
         "Select Data View:",
-        ["Overview", "Individual Item Analysis", "Time Series Comparison", "Top Performers"]
+        ["Overview", "Individual Item Analysis", "Time Series Comparison", "Top Performers", "Geographic Distribution"]
     )
     
     st.markdown("---")
@@ -105,13 +154,13 @@ def prepare_time_series_data(df, metric_name):
 if view_type == "Overview":
     col1, col2 = st.columns(2)
     
-    downloads_total = downloads_df.iloc[:, 1:].sum().sum()
-    views_total = views_df.iloc[:, 1:].sum().sum()
+    downloads_total = int(downloads_df.iloc[:, 1:].sum().sum())
+    views_total = int(views_df.iloc[:, 1:].sum().sum())
     
     with col1:
-        st.metric("Total Downloads", f"{downloads_total:,}")
+        st.metric("Total Downloads", f"{downloads_total:,d}")
     with col2:
-        st.metric("Total Views", f"{views_total:,}")
+        st.metric("Total Views", f"{views_total:,d}")
     
     st.markdown("---")
     
@@ -126,7 +175,7 @@ if view_type == "Overview":
             labels={'x': 'Month', 'y': 'Total Downloads'},
             line_shape='spline'
         )
-        fig_downloads.update_traces(line_color='#1f77b4', line_width=3)
+        fig_downloads.update_traces(line_color='#1f77b4', line_width=3, hovertemplate='Month: %{x}<br>Total Downloads: %{y:.0f}<extra></extra>')
         fig_downloads.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_downloads, use_container_width=True)
     
@@ -139,7 +188,7 @@ if view_type == "Overview":
             labels={'x': 'Month', 'y': 'Total Views'},
             line_shape='spline'
         )
-        fig_views.update_traces(line_color='#ff7f0e', line_width=3)
+        fig_views.update_traces(line_color='#ff7f0e', line_width=3, hovertemplate='Month: %{x}<br>Total Views: %{y:.0f}<extra></extra>')
         fig_views.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_views, use_container_width=True)
     
@@ -162,7 +211,7 @@ if view_type == "Overview":
         line_shape='spline'
     )
     
-    fig_combined.update_traces(line_width=3)
+    fig_combined.update_traces(line_width=3, hovertemplate='%{y:.0f}<extra></extra>')
     fig_combined.update_layout(height=500, hovermode='x unified')
     
     st.plotly_chart(fig_combined, use_container_width=True)
@@ -196,15 +245,15 @@ elif view_type == "Individual Item Analysis":
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Downloads", f"{item_downloads.sum():,}")
+        st.metric("Total Downloads", f"{int(item_downloads.sum()):,d}")
     with col2:
-        st.metric("Total Views", f"{item_views.sum():,}")
+        st.metric("Total Views", f"{int(item_views.sum()):,d}")
     with col3:
         avg_downloads = item_downloads.mean()
-        st.metric("Avg Monthly Downloads", f"{avg_downloads:.1f}")
+        st.metric("Avg Monthly Downloads", f"{avg_downloads:.0f}")
     with col4:
         avg_views = item_views.mean()
-        st.metric("Avg Monthly Views", f"{avg_views:.1f}")
+        st.metric("Avg Monthly Views", f"{avg_views:.0f}")
     
     st.markdown("---")
     
@@ -257,7 +306,8 @@ elif view_type == "Time Series Comparison":
             fig_downloads.add_trace(go.Scatter(
                 x=dates, y=item_data,
                 mode='lines+markers',
-                name=item[:50] + "..." if len(item) > 50 else item
+                name=item[:50] + "..." if len(item) > 50 else item,
+                hovertemplate='%{y:.0f}<extra></extra>'
             ))
         
         fig_downloads.update_layout(
@@ -276,7 +326,8 @@ elif view_type == "Time Series Comparison":
             fig_views.add_trace(go.Scatter(
                 x=dates, y=item_data,
                 mode='lines+markers',
-                name=item[:50] + "..." if len(item) > 50 else item
+                name=item[:50] + "..." if len(item) > 50 else item,
+                hovertemplate='%{y:.0f}<extra></extra>'
             ))
         
         fig_views.update_layout(
@@ -304,7 +355,7 @@ elif view_type == "Top Performers":
     )
     fig_top_downloads.update_traces(
         marker_color='#1f77b4',
-        hovertemplate='%{x}<extra></extra>'  # Remove 'Item' from hover
+        hovertemplate='%{x:.0f}<extra></extra>'  # Remove 'Item' from hover
     )
     fig_top_downloads.update_layout(height=400 + (top_n * 20), showlegend=False)
     fig_top_downloads.update_yaxes(tickmode='linear')
@@ -322,7 +373,7 @@ elif view_type == "Top Performers":
     )
     fig_top_views.update_traces(
         marker_color='#ff7f0e',
-        hovertemplate='%{x}<extra></extra>'  # Remove 'Item' from hover
+        hovertemplate='%{x:.0f}<extra></extra>'  # Remove 'Item' from hover
     )
     fig_top_views.update_layout(height=400 + (top_n * 20), showlegend=False)
     fig_top_views.update_yaxes(tickmode='linear')
@@ -348,6 +399,121 @@ elif view_type == "Top Performers":
             "Total Views": st.column_config.NumberColumn("Views", format="%d")
         }
     )
+
+elif view_type == "Geographic Distribution":
+    st.subheader("🌍 Geographic Distribution")
+    
+    # Add item selector
+    selected_item = st.selectbox(
+        "Select a publication to analyze:",
+        ['All Publications'] + sorted(country_stats['title'].unique().tolist()),
+        key='geo_item_selector'
+    )
+    
+    # Filter country data based on selection
+    if selected_item == 'All Publications':
+        filtered_country_stats = country_stats
+        title_text = "All Publications - Geographic Distribution"
+    else:
+        filtered_country_stats = country_stats[country_stats['title'] == selected_item]
+        title_text = f"{selected_item[:80]}..."
+    
+    # Aggregate country data
+    country_totals = filtered_country_stats.groupby(['country_code', 'country'])['visits'].sum().reset_index()
+    country_totals = country_totals.sort_values('visits', ascending=False)
+    
+    # Display statistics for selected item
+    if selected_item != 'All Publications':
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Countries", f"{len(country_totals):,}")
+        with col2:
+            st.metric("Total Visits", f"{country_totals['visits'].sum():,}")
+        with col3:
+            st.metric("Top Country", country_totals.iloc[0]['country'] if not country_totals.empty else "N/A")
+        with col4:
+            top_visits = country_totals.iloc[0]['visits'] if not country_totals.empty else 0
+            st.metric("Top Country Visits", f"{top_visits:,}")
+        st.markdown("---")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # World map using plotly
+        # Ensure visits column is numeric
+        country_totals['visits'] = pd.to_numeric(country_totals['visits'])
+        
+        fig_map = px.choropleth(
+            country_totals,
+            locations='country',  # Use country names directly
+            locationmode='country names',
+            color='visits',
+            hover_name='country',
+            hover_data={'visits': ':.0f'},  # Format as integer
+            color_continuous_scale='Blues',
+            title=title_text,
+            labels={'visits': 'Total Visits'},
+            range_color=[0, country_totals['visits'].max()] if not country_totals.empty else [0, 1]
+        )
+        fig_map.update_layout(
+            height=500,
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                projection_type='natural earth'
+            )
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+    
+    with col2:
+        # Top 15 countries
+        top_countries = country_totals.head(15)
+        
+        fig_countries = px.bar(
+            top_countries,
+            x='visits',
+            y='country',
+            orientation='h',
+            title="Top 15 Countries by Visits",
+            labels={'visits': 'Total Visits', 'country': 'Country'},
+            color='visits',
+            color_continuous_scale='Blues'  # Match map color scheme
+        )
+        fig_countries.update_layout(
+            height=500,
+            yaxis={'categoryorder': 'total ascending'},
+            showlegend=False,
+            coloraxis_showscale=False  # Hide color scale bar
+        )
+        # Format hover template to show integers
+        fig_countries.update_traces(hovertemplate='%{y}<br>Total Visits: %{x:.0f}<extra></extra>')
+        st.plotly_chart(fig_countries, use_container_width=True)
+    
+    # Detailed country table
+    st.subheader("📊 Detailed Country Statistics")
+    
+    # Add search functionality
+    search_country = st.text_input("🔍 Search countries:", placeholder="Enter country name...")
+    
+    filtered_countries = country_totals.copy()
+    if search_country:
+        filtered_countries = filtered_countries[
+            filtered_countries['country'].str.contains(search_country, case=False, na=False)
+        ]
+    
+    # Display table
+    st.dataframe(
+        filtered_countries[['country', 'country_code', 'visits']].reset_index(drop=True),
+        use_container_width=True,
+        column_config={
+            'country': st.column_config.TextColumn('Country', width='large'),
+            'country_code': st.column_config.TextColumn('Code', width='small'),
+            'visits': st.column_config.NumberColumn('Total Visits', format='%d')
+        },
+        hide_index=True
+    )
+    
+    st.info(f"Showing {len(filtered_countries)} of {len(country_totals)} countries")
 
 st.markdown("---")
 st.caption("Dashboard created with Streamlit • Data from Research Collection Metadata")
