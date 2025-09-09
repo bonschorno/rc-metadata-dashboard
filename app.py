@@ -3,6 +3,11 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import os
+from pathlib import Path
+from api_client import ETHResearchCollectionAPI
+from publication_stats import PublicationStatsAPI
+import time
 
 st.set_page_config(
     page_title="Research Collection Metadata",
@@ -16,11 +21,21 @@ def check_authentication():
     return st.session_state.authenticated
 
 def authenticate_user(api_key, group_id):
+    """Authenticate and test API connection."""
     if api_key and group_id and len(group_id) == 5 and group_id.isdigit():
-        st.session_state.authenticated = True
-        st.session_state.api_key = api_key
-        st.session_state.group_id = group_id
-        return True
+        try:
+            # Test API connection with real credentials
+            test_client = ETHResearchCollectionAPI(api_key=api_key, group_identifier=group_id)
+            # Try fetching just 1 item to test the connection
+            test_data = test_client.fetch_publications(max_items=1)
+            if test_data:
+                st.session_state.authenticated = True
+                st.session_state.api_key = api_key
+                st.session_state.group_id = group_id
+                return True
+        except Exception as e:
+            st.error(f"API connection failed: {str(e)}")
+            return False
     return False
 
 if not check_authentication():
@@ -61,7 +76,7 @@ if not check_authentication():
             else:
                 st.error("Authentication failed. Please check your credentials.")
     
-    st.info("💡 For this demo, enter any API key and group ID to access the dashboard.")
+    st.info("💡 Enter your ETH Research Collection API key and 5-digit group ID (e.g., 09746).")
     st.stop()
 
 st.title("📊 Research Collection Metadata")
@@ -70,18 +85,91 @@ st.markdown("---")
 with st.sidebar:
     st.success(f"✅ Authenticated (Group: {st.session_state.group_id})")
     if st.button("Logout"):
+        # Clear session state
         st.session_state.authenticated = False
         st.session_state.api_key = None
+        old_group_id = st.session_state.group_id
         st.session_state.group_id = None
+        
+        # Clear the cache for the old group
+        try:
+            st.cache_data.clear()
+        except:
+            pass
+        
         st.rerun()
     st.markdown("---")
 
-@st.cache_data
-def load_data():
-    # Load the new CSV files
-    monthly_visits = pd.read_csv('data/monthly_visits.csv')
-    publication_stats = pd.read_csv('data/publication_statistics.csv')
-    country_stats = pd.read_csv('data/country_statistics.csv')
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_data(group_id):
+    """Load data from API or cache - specific to group ID."""
+    # Create group-specific data directory
+    data_dir = Path(f'data/group_{group_id}')
+    data_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if we have recent cached data (less than 1 hour old)
+    cache_files = [
+        data_dir / 'monthly_visits.csv',
+        data_dir / 'publication_statistics.csv', 
+        data_dir / 'country_statistics.csv'
+    ]
+    
+    # Check if all cache files exist and are recent
+    use_cache = all(f.exists() for f in cache_files)
+    if use_cache:
+        # Check if files are less than 1 hour old
+        oldest_time = min(f.stat().st_mtime for f in cache_files)
+        if time.time() - oldest_time > 3600:  # 1 hour in seconds
+            use_cache = False
+    
+    if use_cache:
+        # Load from existing files
+        monthly_visits = pd.read_csv(cache_files[0])
+        publication_stats = pd.read_csv(cache_files[1])
+        country_stats = pd.read_csv(cache_files[2])
+    else:
+        # Fetch fresh data from API
+        with st.spinner('Fetching fresh data from API...'):
+            try:
+                # Initialize API clients
+                pub_client = ETHResearchCollectionAPI(
+                    api_key=st.session_state.api_key,
+                    group_identifier=st.session_state.group_id
+                )
+                stats_client = PublicationStatsAPI(api_key=st.session_state.api_key)
+                
+                # Fetch publications metadata
+                st.info("Fetching publication metadata...")
+                df_publications = pub_client.fetch_and_save(output_dir=str(data_dir), max_items=50)  # Limit for testing
+                
+                # Get UUIDs and titles for statistics fetching
+                uuids = df_publications['uuid'].tolist()
+                titles = df_publications['name'].tolist()
+                
+                # Fetch statistics for each publication
+                st.info(f"Fetching statistics for {len(uuids)} publications...")
+                stats_list = stats_client.fetch_multiple_stats(uuids, titles, delay=0.5)
+                
+                # Save statistics to CSV files
+                df_main, df_monthly, df_countries = stats_client.save_statistics(stats_list, output_dir=str(data_dir))
+                
+                # Load the saved files
+                monthly_visits = df_monthly
+                publication_stats = df_main
+                country_stats = df_countries
+                
+                st.success("✅ Data successfully fetched and cached!")
+                
+            except Exception as e:
+                st.error(f"Error fetching data: {str(e)}")
+                # Fall back to any existing data
+                if all(f.exists() for f in cache_files):
+                    st.warning("Using previously cached data...")
+                    monthly_visits = pd.read_csv(cache_files[0])
+                    publication_stats = pd.read_csv(cache_files[1])
+                    country_stats = pd.read_csv(cache_files[2])
+                else:
+                    raise Exception("No cached data available and API fetch failed.")
     
     # Convert month column to YYYY-MM format
     month_map = {
@@ -131,7 +219,7 @@ def load_data():
     
     return downloads_pivot, views_pivot, country_stats
 
-downloads_df, views_df, country_stats = load_data()
+downloads_df, views_df, country_stats = load_data(st.session_state.group_id)
 
 with st.sidebar:
     st.header("📋 Dashboard Controls")
@@ -516,4 +604,4 @@ elif view_type == "Geographic Distribution":
     st.info(f"Showing {len(filtered_countries)} of {len(country_totals)} countries")
 
 st.markdown("---")
-st.caption("Dashboard created with Streamlit • Data from Research Collection Metadata")
+st.caption("Dashboard created with [Streamlit](https://streamlit.io/) • Data from [ETH's Research Collection](https://www.research-collection.ethz.ch/home)")
